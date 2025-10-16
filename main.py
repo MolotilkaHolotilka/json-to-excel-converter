@@ -29,6 +29,8 @@ PREFERRED_ORDER = [
     "Date Offered",
     "Qty Ordered",
     "Date Ordered",
+    "Qty Placed",
+    "Date Placed"
 ]
 
 def create_formatted_excel(data: List[Dict[str, Any]]) -> str:
