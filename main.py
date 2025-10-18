@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -9,13 +9,13 @@ import tempfile
 import os
 from datetime import datetime
 
-app = FastAPI(title="JSON to Excel Converter", version="1.0.0")
+app = FastAPI(title="JSON to Excel Converter", version="1.1.0")
 
 class ExcelData(BaseModel):
     data: List[Dict[str, Any]]
 
-# Жёстко заданная последовательность колонок (как на скрине)
-PREFERRED_ORDER = [
+# Общий (по умолчанию) порядок колонок
+PREFERRED_ORDER_DEFAULT = [
     "Category",
     "Brand",
     "Model",
@@ -30,15 +30,36 @@ PREFERRED_ORDER = [
     "Qty Ordered",
     "Date Ordered",
     "Qty Placed",
-    "Date Placed"
+    "Date Placed",
 ]
 
-def create_formatted_excel(data: List[Dict[str, Any]]) -> str:
+# Порядок колонок для одежды (как на скрине)
+PREFERRED_ORDER_CLOTHES = [
+    "SKU id",
+    "Product",
+    "Manufacturer Size",
+    "Color",
+    "Gender",
+    "Division",
+    "Product Type",
+    "DDP Price RUB",
+    "Qty Offered",
+    "Date Offered",
+    "Qty Ordered",
+    "Date Ordered",
+    "Qty Placed",
+    "Date Placed",
+]
+
+def create_formatted_excel(
+    data: List[Dict[str, Any]],
+    preferred_order: Optional[List[str]] = None
+) -> str:
     """
-    Создает красиво отформатированный Excel файл из JSON данных,
-    фиксируя порядок колонок по PREFERRED_ORDER.
-    Поля, которых нет в PREFERRED_ORDER, добавляются в конец
-    в порядке первого появления в данных.
+    Создает красиво отформатированный Excel из JSON-данных.
+    Порядок колонок фиксируется по preferred_order (если передан).
+    Поля, отсутствующие в preferred_order, добавляются в конце
+    в порядке первого появления.
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -47,15 +68,17 @@ def create_formatted_excel(data: List[Dict[str, Any]]) -> str:
     if not data:
         return None
 
-    # 1) Берём из предпочтительного списка только те поля, которые реально встречаются
+    # 1) Заголовки: берем из preferred_order только реально встречающиеся в данных поля
     headers: List[str] = []
     seen = set()
-    for k in PREFERRED_ORDER:
-        if any(k in row for row in data):
-            headers.append(k)
-            seen.add(k)
 
-    # 2) Добавляем любые другие поля, встреченные в данных, в порядке первого появления
+    order = preferred_order or []
+    for key in order:
+        if any(key in row for row in data):
+            headers.append(key)
+            seen.add(key)
+
+    # 2) Любые другие поля из данных — в порядке первого появления
     for row in data:
         for k in row.keys():
             if k not in seen:
@@ -81,7 +104,7 @@ def create_formatted_excel(data: List[Dict[str, Any]]) -> str:
         cell.alignment = header_alignment
         cell.border = thin_border
 
-    # Данные (None -> "", чтобы не было "None" в Excel)
+    # Данные (None -> "")
     for row_idx, row_data in enumerate(data, 2):
         for col_idx, header in enumerate(headers, 1):
             value = row_data.get(header, "")
@@ -102,19 +125,26 @@ def create_formatted_excel(data: List[Dict[str, Any]]) -> str:
                 max_len = max(max_len, len(str(v)))
         ws.column_dimensions[column_letter].width = min(max_len + 2, 50)
 
+    # Заморозка шапки
     ws.freeze_panes = "A2"
 
+    # Сохранение во временный файл
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
     temp_file.close()
     wb.save(temp_file.name)
     return temp_file.name
 
+# ===== ЭНДПОИНТЫ =====
+
 @app.post("/convert-to-excel")
 async def convert_to_excel(excel_data: ExcelData):
+    """
+    Базовый конвертер с дефолтным порядком колонок.
+    """
     try:
         if not excel_data.data:
             raise HTTPException(status_code=400, detail="Данные не могут быть пустыми")
-        excel_file_path = create_formatted_excel(excel_data.data)
+        excel_file_path = create_formatted_excel(excel_data.data, PREFERRED_ORDER_DEFAULT)
         if not excel_file_path:
             raise HTTPException(status_code=500, detail="Ошибка при создании Excel файла")
         return FileResponse(
@@ -125,13 +155,36 @@ async def convert_to_excel(excel_data: ExcelData):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при обработке данных: {str(e)}")
 
+@app.post("/clothes/convert-to-excel")
+async def convert_to_excel_clothes(excel_data: ExcelData):
+    """
+    Конвертер для одежды. Порядок колонок как на скрине:
+    ['SKU id', 'Product', 'Manufacturer Size', 'Color', 'Gender', 'Division',
+     'Product Type', 'DDP Price RUB', 'Qty Offered', 'Date Offered',
+     'Qty Ordered', 'Date Ordered', 'Qty Placed', 'Date Placed']
+    """
+    try:
+        if not excel_data.data:
+            raise HTTPException(status_code=400, detail="Данные не могут быть пустыми")
+        excel_file_path = create_formatted_excel(excel_data.data, PREFERRED_ORDER_CLOTHES)
+        if not excel_file_path:
+            raise HTTPException(status_code=500, detail="Ошибка при создании Excel файла")
+        return FileResponse(
+            path=excel_file_path,
+            filename=f"clothes_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при обработке данных: {str(e)}")
+
 @app.get("/")
 async def root():
     return {
         "message": "JSON to Excel Converter API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "endpoints": {
-            "POST /convert-to-excel": "Конвертирует JSON данные в Excel файл",
+            "POST /convert-to-excel": "Конвертация JSON → Excel (дефолтный порядок колонок)",
+            "POST /clothes/convert-to-excel": "Конвертация JSON → Excel (порядок колонок как на скрине для одежды)",
             "GET /": "Информация о API"
         }
     }
