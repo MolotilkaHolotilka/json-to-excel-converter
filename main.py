@@ -16,15 +16,13 @@ class ExcelData(BaseModel):
 
 # Общий (по умолчанию) порядок колонок
 PREFERRED_ORDER_DEFAULT = [
+    "EAN",
     "Category",
     "Brand",
     "Model",
     "Color",
     "DDP (RUB)",
     "Valid Until",
-    "Markup Serb",
-    "Markup RU",
-    "Exchange Rate",
     "Qty Offered",
     "Date Offered",
     "Qty Ordered",
